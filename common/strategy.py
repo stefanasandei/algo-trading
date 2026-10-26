@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from enum import Enum
 
-from common.market_data import AlpacaMarketData
+from common.market_data import MarketData
 
 
 class Signal(Enum):
@@ -12,7 +12,7 @@ class Signal(Enum):
 
 class Strategy(ABC):
 
-    def __init__(self, data: AlpacaMarketData):
+    def __init__(self, data: MarketData):
         self.data = data
 
     @abstractmethod
