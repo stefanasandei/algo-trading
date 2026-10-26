@@ -1,13 +1,18 @@
-from common.strategy import Strategy, Signal
+from datetime import datetime
+
+from common.market_data import MarketView
+from common.strategy import Strategy
 
 
 class SmaStrategy(Strategy):
-    def run(self, symbol: str) -> Signal:
-        candles = self.data.get_candles(symbol, minutes=5, limit=20)
 
-        if len(candles) < 20:
-            return Signal.HOLD
+    def targets(self, view: MarketView, t: datetime | None) -> dict[str, float]:
+        symbol = self.symbols[0]
+        closes = view.closes([symbol], t, 20)[symbol]
 
-        sma = sum(c.close for c in candles) / len(candles)
+        if len(closes) < 20:
+            return {symbol: 0.0}
 
-        return Signal.BUY if candles[-1].close > sma else Signal.SELL
+        sma = sum(closes) / len(closes)
+
+        return {symbol: 1.0 if closes.iloc[-1] > sma else 0.0}

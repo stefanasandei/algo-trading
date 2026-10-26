@@ -1,106 +1,95 @@
-from dotenv import load_dotenv
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 import os
 
-
+from alpaca.common.enums import Sort
+from alpaca.data.enums import DataFeed
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
-from alpaca.data.enums import DataFeed
-from alpaca.common.enums import Sort
-
+from dotenv import load_dotenv
 import pandas as pd
-import yfinance as yf
 
 from common.bar_cache import bar_path
 
 
-@dataclass(frozen=True)
-class Candle:
-    timestamp: datetime
-    open: float
-    high: float
-    low: float
-    close: float
-    volume: float
+class MarketView(ABC):
+    """Bar closes as of a point in time. A bar is visible once its close <= t."""
 
-
-class MarketData(ABC):
-
-    def __init__(self):
+    def __init__(self, minutes: int):
         load_dotenv()
+        self.minutes = minutes
+        self.bar = timedelta(minutes=minutes)
 
     @abstractmethod
-    def get_candles(self, symbol: str, minutes: int, limit: int) -> list[Candle]:
-        pass
+    def closes(self, symbols: list[str], t: datetime | None, n: int) -> pd.DataFrame:
+        """Last n closes per symbol visible at t (None = latest). Columns = symbols."""
+
+    @abstractmethod
+    def history(self, symbols: list[str], start: datetime, end: datetime) -> pd.DataFrame:
+        """Closes of bars starting in [start, end). Columns = symbols."""
 
 
-class AlpacaMarketData(MarketData):
+class AlpacaMarketView(MarketView):
 
-    def __init__(self):
-        super().__init__()
-
+    def __init__(self, minutes: int, feed: DataFeed = DataFeed.IEX):
+        super().__init__(minutes)
+        self.feed = feed
         self.client = StockHistoricalDataClient(
             os.environ["ALPACA_KEY"], os.environ["ALPACA_SECRET"]
         )
 
-    def get_candles(self, symbol: str, minutes: int, limit: int) -> list[Candle]:
+    def _series(self, symbol: str, **kwargs) -> pd.Series:
         request = StockBarsRequest(
             symbol_or_symbols=symbol,
-            timeframe=TimeFrame(minutes, TimeFrameUnit.Minute),
-            limit=limit,
-            sort=Sort.DESC,
-            feed=DataFeed.IEX,
+            timeframe=TimeFrame(self.minutes, TimeFrameUnit.Minute),
+            feed=self.feed,
+            **kwargs,
+        )
+        bars = self.client.get_stock_bars(request).data.get(symbol, [])
+        return pd.Series({b.timestamp: b.close for b in bars}, dtype=float).sort_index()
+
+    def closes(self, symbols: list[str], t: datetime | None, n: int) -> pd.DataFrame:
+        end = None if t is None else t - self.bar
+        start = None if t is None else end - timedelta(days=10)  # API needs start with end
+        return pd.concat(
+            {s: self._series(s, start=start, end=end, limit=n, sort=Sort.DESC) for s in symbols},
+            axis=1,
+            join="inner",
         )
 
-        bars = self.client.get_stock_bars(request)
-        data = bars.data[symbol]
-
-        return [
-            Candle(
-                timestamp=b.timestamp,
-                open=b.open,
-                high=b.high,
-                low=b.low,
-                close=b.close,
-                volume=b.volume,
-            )
-            for b in reversed(data)
-        ]
+    def history(self, symbols: list[str], start: datetime, end: datetime) -> pd.DataFrame:
+        return pd.concat(
+            {s: self._series(s, start=start, end=end - self.bar, sort=Sort.ASC) for s in symbols},
+            axis=1,
+            join="inner",
+        )
 
 
-class ParquetMarketData(MarketData):
+class ParquetMarketView(MarketView):
 
     def __init__(self, directory: str, minutes: int):
-        super().__init__()
+        super().__init__(minutes)
         self.directory = directory
-        self.minutes = minutes
-        self.frames: dict[str, pd.DataFrame] = {}
-        self.cursor: datetime | None = None
+        self.cache: dict[str, pd.Series] = {}
 
-    def _frame(self, symbol: str) -> pd.DataFrame:
-        if symbol not in self.frames:
+    def _load(self, symbol: str) -> pd.Series:
+        if symbol not in self.cache:
             df = pd.read_parquet(bar_path(self.directory, symbol, self.minutes))
-            self.frames[symbol] = df.sort_values("timestamp").reset_index(drop=True)
-        return self.frames[symbol]
+            df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+            self.cache[symbol] = df.set_index("timestamp")["close"].sort_index()
+        return self.cache[symbol]
 
-    def load(self, symbol: str, start: datetime, end: datetime) -> pd.DataFrame:
-        df = self._frame(symbol)
-        return df[(df.timestamp >= start) & (df.timestamp < end)]
+    def closes(self, symbols: list[str], t: datetime | None, n: int) -> pd.DataFrame:
+        # Index is bar start; a bar with start <= t - bar has closed by t.
+        series = {}
+        for s in symbols:
+            c = self._load(s)
+            if t is not None:
+                c = c.loc[: t - self.bar]
+            series[s] = c.tail(n)
+        return pd.concat(series, axis=1, join="inner")
 
-    def replay(self, symbol: str, start: datetime, end: datetime) -> list[datetime]:
-        # Close time of each bar; a bar is complete once its close is reached.
-        # A list (not a generator) so tqdm knows the total.
-        return [ts + timedelta(minutes=self.minutes) for ts in self.load(symbol, start, end).timestamp]
-
-    def set_cursor(self, t: datetime):
-        self.cursor = t
-
-    def get_candles(self, symbol: str, minutes: int, limit: int) -> list[Candle]:
-        df = self._frame(symbol)
-        # Only bars that closed at or before the cursor are visible.
-        end = df.timestamp.searchsorted(self.cursor - timedelta(minutes=self.minutes), side="right")
-        rows = df.iloc[max(0, end - limit):end][["timestamp", "open", "high", "low", "close", "volume"]]
-        return [Candle(*r) for r in rows.itertuples(index=False)]
+    def history(self, symbols: list[str], start: datetime, end: datetime) -> pd.DataFrame:
+        series = {s: self._load(s).loc[start : end - self.bar] for s in symbols}
+        return pd.concat(series, axis=1, join="inner")
