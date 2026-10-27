@@ -82,6 +82,11 @@ class ParquetMarketView(MarketView):
 
     def closes(self, symbols: list[str], t: datetime | None, n: int) -> pd.DataFrame:
         # Index is bar start; a bar with start <= t - bar has closed by t.
+        if len(symbols) == 1:
+            c = self._load(symbols[0])
+            end = len(c) if t is None else c.index.searchsorted(t - self.bar, side="right")
+            return c.iloc[:end].tail(n).to_frame(name=symbols[0])
+
         series = {}
         for s in symbols:
             c = self._load(s)

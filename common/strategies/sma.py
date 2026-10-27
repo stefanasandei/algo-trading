@@ -6,11 +6,17 @@ from common.strategy import Strategy
 
 class SmaStrategy(Strategy):
 
+    def __init__(self, symbols: list[str], window: int = 20):
+        super().__init__(symbols)
+        if window < 1:
+            raise ValueError("SMA window must be positive")
+        self.window = window
+
     def targets(self, view: MarketView, t: datetime | None = None) -> dict[str, float]:
         symbol = self.symbols[0]
-        closes = view.closes([symbol], t, 20)[symbol]
+        closes = view.closes([symbol], t, self.window)[symbol]
 
-        if len(closes) < 20:
+        if len(closes) < self.window:
             return {symbol: 0.0}
 
         sma = sum(closes) / len(closes)
