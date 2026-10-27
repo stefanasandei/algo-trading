@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime
+from math import sqrt
 
-import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
@@ -26,21 +26,30 @@ def backtest(
     bars_per_year: float | None = None,
 ) -> BacktestReport:
     prices = view.history(strategy.symbols, start, end)
-    close_times = prices.index + view.bar
+    if len(prices) < 2:
+        raise ValueError("Backtest needs at least two bars")
 
-    # Decide at each bar's close; hold the weights until the next bar's close.
-    weights = []
-    for t in tqdm(close_times):
-        w = strategy.targets(view, t)
-        weights.append([w.get(s, 0.0) for s in strategy.symbols])
-    weights = pd.DataFrame(weights, index=prices.index, columns=strategy.symbols)
+    targets = [strategy.targets(view, t) for t in tqdm(prices.index + view.bar)]
+    weights = pd.DataFrame(targets, index=prices.index)
+    weights = weights.reindex(columns=strategy.symbols).fillna(0.0)
 
-    asset_returns = prices.pct_change().shift(-1).fillna(0)
-    returns = (weights * asset_returns).sum(axis=1)
+    # Targets chosen at a bar's close apply to the following bar's return.
+    asset_returns = prices.pct_change(fill_method=None)
+    returns = (weights.shift(1) * asset_returns).sum(axis=1)
     equity = (1 + returns).cumprod()
 
-    years = (prices.index[-1] - prices.index[0]).total_seconds() / (365.25 * 86400)
-    bars_per_year = bars_per_year or len(returns) / years
-    sharpe = returns.mean() / returns.std() * np.sqrt(bars_per_year) if returns.std() else 0.0
+    # The first bar has no previous position, so exclude it from Sharpe.
+    realized = returns.iloc[1:]
+    if bars_per_year is None:
+        years = (prices.index[-1] - prices.index[0]) / pd.Timedelta(days=365.25)
+        bars_per_year = len(realized) / years
+    volatility = realized.std()
+    sharpe = realized.mean() / volatility * sqrt(bars_per_year) if volatility > 0 else 0.0
 
-    return BacktestReport(weights, returns, equity, equity.iloc[-1] - 1, sharpe)
+    return BacktestReport(
+        weights=weights,
+        returns=returns,
+        equity=equity,
+        profit=equity.iloc[-1] - 1,
+        sharpe=sharpe,
+    )

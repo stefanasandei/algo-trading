@@ -5,7 +5,7 @@ from common.market_data import AlpacaMarketView, ParquetMarketView
 from common.strategies.buy_and_hold import BuyAndHoldStrategy
 from common.strategies.sma import SmaStrategy
 
-print(SmaStrategy(["AAPL"]).targets(AlpacaMarketView(minutes=5), None))
+print(SmaStrategy(["AAPL"]).targets(AlpacaMarketView(minutes=5)))
 
 start = datetime(2023, 1, 1, tzinfo=timezone.utc)
 end = datetime(2023, 12, 1, tzinfo=timezone.utc)

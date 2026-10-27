@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import os
 
 from alpaca.common.enums import Sort
@@ -17,7 +17,6 @@ class MarketView(ABC):
     """Bar closes as of a point in time. A bar is visible once its close <= t."""
 
     def __init__(self, minutes: int):
-        load_dotenv()
         self.minutes = minutes
         self.bar = timedelta(minutes=minutes)
 
@@ -34,6 +33,7 @@ class AlpacaMarketView(MarketView):
 
     def __init__(self, minutes: int, feed: DataFeed = DataFeed.IEX):
         super().__init__(minutes)
+        load_dotenv()
         self.feed = feed
         self.client = StockHistoricalDataClient(
             os.environ["ALPACA_KEY"], os.environ["ALPACA_SECRET"]
@@ -50,8 +50,8 @@ class AlpacaMarketView(MarketView):
         return pd.Series({b.timestamp: b.close for b in bars}, dtype=float).sort_index()
 
     def closes(self, symbols: list[str], t: datetime | None, n: int) -> pd.DataFrame:
-        end = None if t is None else t - self.bar
-        start = None if t is None else end - timedelta(days=10)  # API needs start with end
+        end = (t or datetime.now(timezone.utc)) - self.bar
+        start = datetime(1970, 1, 1, tzinfo=timezone.utc)
         return pd.concat(
             {s: self._series(s, start=start, end=end, limit=n, sort=Sort.DESC) for s in symbols},
             axis=1,
@@ -60,7 +60,7 @@ class AlpacaMarketView(MarketView):
 
     def history(self, symbols: list[str], start: datetime, end: datetime) -> pd.DataFrame:
         return pd.concat(
-            {s: self._series(s, start=start, end=end - self.bar, sort=Sort.ASC) for s in symbols},
+            {s: self._series(s, start=start, end=end - timedelta(microseconds=1), sort=Sort.ASC) for s in symbols},
             axis=1,
             join="inner",
         )
@@ -91,5 +91,8 @@ class ParquetMarketView(MarketView):
         return pd.concat(series, axis=1, join="inner")
 
     def history(self, symbols: list[str], start: datetime, end: datetime) -> pd.DataFrame:
-        series = {s: self._load(s).loc[start : end - self.bar] for s in symbols}
+        series = {}
+        for s in symbols:
+            c = self._load(s)
+            series[s] = c.loc[(c.index >= start) & (c.index < end)]
         return pd.concat(series, axis=1, join="inner")

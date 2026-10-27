@@ -18,6 +18,8 @@ def bar_path(directory: str | Path, symbol: str, minutes: int) -> Path:
 def sync_sip_bars(client, symbols: list[str], minutes: int, start: datetime, end: datetime, directory: str | Path):
     # Free plan: SIP history is only available older than 15 minutes.
     end = min(end, datetime.now(timezone.utc) - timedelta(minutes=16))
+    if start >= end:
+        return
     Path(directory).mkdir(parents=True, exist_ok=True)
 
     # Work out the missing range per symbol, then group symbols by range
@@ -29,10 +31,13 @@ def sync_sip_bars(client, symbols: list[str], minutes: int, start: datetime, end
             jobs.setdefault((start, end), []).append(s)
             continue
         ts = pd.read_parquet(p, columns=["timestamp"])["timestamp"]
+        if ts.empty:
+            jobs.setdefault((start, end), []).append(s)
+            continue
         if ts.min() > start:
-            jobs.setdefault((start, ts.min()), []).append(s)
+            jobs.setdefault((start, min(ts.min(), end)), []).append(s)
         if ts.max() < end:
-            jobs.setdefault((ts.max(), end), []).append(s)
+            jobs.setdefault((max(ts.max(), start), end), []).append(s)
 
     for (a, b), group in jobs.items():
         req = StockBarsRequest(
@@ -44,6 +49,7 @@ def sync_sip_bars(client, symbols: list[str], minutes: int, start: datetime, end
             sort=Sort.ASC,
         )
         bars = client.get_stock_bars(req).df
+        time.sleep(0.35)  # stay under 200 req/min
         if bars.empty:
             continue
         for s, new in bars.reset_index().groupby("symbol"):
@@ -51,5 +57,4 @@ def sync_sip_bars(client, symbols: list[str], minutes: int, start: datetime, end
             new = new[COLUMNS]
             if p.exists():
                 new = pd.concat([pd.read_parquet(p), new])
-            new.drop_duplicates("timestamp").sort_values("timestamp").to_parquet(p, index=False)
-        time.sleep(0.35)  # stay under 200 req/min
+            new.drop_duplicates("timestamp", keep="last").sort_values("timestamp").to_parquet(p, index=False)

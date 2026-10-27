@@ -6,7 +6,7 @@ from common.strategy import Strategy
 
 class SmaStrategy(Strategy):
 
-    def targets(self, view: MarketView, t: datetime | None) -> dict[str, float]:
+    def targets(self, view: MarketView, t: datetime | None = None) -> dict[str, float]:
         symbol = self.symbols[0]
         closes = view.closes([symbol], t, 20)[symbol]
 

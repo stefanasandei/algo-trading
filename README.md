@@ -7,3 +7,7 @@ A simple experiment bench to learn algo trading.
 ```sh
 pip install -e .
 ```
+
+```sh
+python3 ./bot/entry.py
+```
