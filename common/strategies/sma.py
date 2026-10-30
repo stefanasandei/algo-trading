@@ -13,12 +13,18 @@ class SmaStrategy(Strategy):
         self.window = window
 
     def targets(self, view: MarketView, t: datetime | None = None) -> dict[str, float]:
-        symbol = self.symbols[0]
-        closes = view.closes([symbol], t, self.window)[symbol]
+        targets = {}
+        for symbol in self.symbols:
+            closes = view.closes([symbol], t, self.window)[symbol]
+            targets[symbol] = 0.0
 
-        if len(closes) < self.window:
-            return {symbol: 0.0}
+            if len(closes) < self.window:
+                continue
 
-        sma = sum(closes) / len(closes)
+            sma = sum(closes) / len(closes)
+            if not closes.iloc[-1] > sma:
+                continue
 
-        return {symbol: 1.0 if closes.iloc[-1] > sma else 0.0}
+            targets[symbol] = 1.0 / len(self.symbols)
+
+        return targets

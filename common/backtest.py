@@ -118,8 +118,9 @@ def monte_carlo(
     simulations: int = 1000,
     seed: int | None = None,
     progress: bool = True,
+    return_paths: bool = False,
 ) -> pd.DataFrame:
-    """Bootstrap independent returns; report profit and positive max drawdown per path."""
+    """Bootstrap independent returns; return summary metrics or equity paths."""
     values = returns.to_numpy(dtype=float)
     if simulations < 1 or not len(values):
         raise ValueError("Need returns and at least one simulation")
@@ -131,7 +132,12 @@ def monte_carlo(
     for _ in tqdm(range(simulations), desc="Monte Carlo", disable=not progress):
         sample = rng.choice(values, size=len(values), replace=True)
         equity = np.concatenate(([1.0], (1 + sample).cumprod()))
-        drawdown = 1 - equity / np.maximum.accumulate(equity)
-        results.append((equity[-1] - 1, drawdown.max()))
+        if return_paths:
+            results.append(equity)
+        else:
+            drawdown = 1 - equity / np.maximum.accumulate(equity)
+            results.append((equity[-1] - 1, drawdown.max()))
 
+    if return_paths:
+        return pd.DataFrame(results).T
     return pd.DataFrame(results, columns=["profit", "max_drawdown"])
